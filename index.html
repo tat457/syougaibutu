@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SkySprint Motion OBBY</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header><span class="eyebrow">CAMERA MOTION GAME</span><h1>SKYSPRINT <em>OBBY</em></h1><p>映像に合わせて動こう。カメラ映像は端末の外へ送信されません。</p></header>
+    <section class="stage" aria-label="ゲーム画面">
+      <video id="course" playsinline preload="auto" src="assets/obby_run_30sec.mp4"></video>
+      <div id="startLayer" class="start-layer"><h2>READY?</h2><p>カメラを許可して、全身が入る位置に立ってください。</p><button id="startButton">カメラをつないでスタート</button><small>推奨：PCのブラウザで localhost から開く</small></div>
+      <div id="hud" hidden><div id="command">GET READY</div><div id="status">姿勢を読み取り中…</div><div id="score">SCORE <b>0</b></div><div id="combo">×1</div></div>
+      <div id="success" aria-live="polite"></div>
+      <aside id="cameraBox"><video id="webcam" autoplay playsinline muted></video><canvas id="skeleton"></canvas><span>YOUR MOTION</span></aside>
+    </section>
+    <section class="controls"><button id="restart" disabled>もう一度あそぶ</button><button id="recalibrate" disabled>ニュートラル姿勢を再設定</button><span id="notice" role="status"></span></section>
+    <section class="howto"><h2>あそびかた</h2><div><p><b>JUMP</b> 上にジャンプ</p><p><b>LEFT / RIGHT</b> 画面に対して左右へ移動</p><p><b>DUCK</b> しゃがむ</p><p><b>DODGE</b> 左右どちらかに避ける</p></div></section>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

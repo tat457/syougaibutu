@@ -2,23 +2,740 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SkySprint Motion OBBY</title>
-  <link rel="stylesheet" href="style.css">
+  
+  <!-- Tailwind CSS & Fonts -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet">
+  
+  <!-- MediaPipe Pose & Camera Utils CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+  
+  <!-- Three.js CDN for 3D Fallback Course Renderer -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Outfit', 'Noto Sans JP', sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+    .text-shadow-glow {
+      text-shadow: 0 0 20px rgba(59, 130, 246, 0.8), 0 0 40px rgba(147, 51, 234, 0.6);
+    }
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.80);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    /* Simple confetti particle effect */
+    @keyframes particle-fly {
+      0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+      100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+    }
+    .confetti-piece {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      top: -20px;
+      animation: particle-fly 2.5s ease-out forwards;
+    }
+  </style>
 </head>
-<body>
-  <main>
-    <header><span class="eyebrow">CAMERA MOTION GAME</span><h1>SKYSPRINT <em>OBBY</em></h1><p>映像に合わせて動こう。カメラ映像は端末の外へ送信されません。</p></header>
-    <section class="stage" aria-label="ゲーム画面">
-      <video id="course" playsinline preload="auto" src="assets/obby_run_30sec.mp4"></video>
-      <div id="startLayer" class="start-layer"><h2>READY?</h2><p>カメラを許可して、全身が入る位置に立ってください。</p><button id="startButton">カメラをつないでスタート</button><small>推奨：PCのブラウザで localhost から開く</small></div>
-      <div id="hud" hidden><div id="command">GET READY</div><div id="status">姿勢を読み取り中…</div><div id="score">SCORE <b>0</b></div><div id="combo">×1</div></div>
-      <div id="success" aria-live="polite"></div>
-      <aside id="cameraBox"><video id="webcam" autoplay playsinline muted></video><canvas id="skeleton"></canvas><span>YOUR MOTION</span></aside>
+<body class="bg-slate-950 text-white min-h-screen flex flex-col overflow-x-hidden select-none">
+
+  <!-- Header -->
+  <header class="py-3 px-6 bg-slate-900/90 border-b border-slate-800 flex justify-between items-center backdrop-blur-md sticky top-0 z-50">
+    <div class="flex items-center gap-3">
+      <div class="bg-gradient-to-tr from-cyan-500 to-indigo-500 p-2 rounded-xl shadow-lg shadow-cyan-500/20">
+        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+      </div>
+      <div>
+        <span class="text-[10px] font-bold tracking-widest text-cyan-400 block uppercase">Motion Sync Game</span>
+        <h1 class="text-lg font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-200 to-cyan-300">
+          SKYSPRINT <em class="not-italic text-cyan-400">OBBY</em>
+        </h1>
+      </div>
+    </div>
+    
+    <div class="flex items-center gap-3">
+      <span id="controlModeBadge" class="px-3 py-1 text-xs font-semibold rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+        🎮 待機中
+      </span>
+      <button id="toggleKeyboardBtn" class="px-3 py-1.5 text-xs font-bold rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 transition">
+        キーボード操作に変更
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Display Area -->
+  <main class="flex-1 flex flex-col items-center justify-center p-4 relative">
+    
+    <!-- Stage Area Container -->
+    <div class="relative w-full max-w-5xl aspect-video rounded-2xl overflow-hidden shadow-2xl border border-slate-800 bg-black">
+      
+      <!-- 3D Canvas Fallback background when video asset is not loaded -->
+      <canvas id="courseCanvas" class="w-full h-full object-cover absolute inset-0 z-0"></canvas>
+
+      <!-- Video Element -->
+      <video id="courseVideo" playsinline preload="auto" class="w-full h-full object-cover absolute inset-0 z-0 transition-opacity duration-500 opacity-0">
+        <source src="assets/obby_run_30sec.mp4" type="video/mp4">
+        お使いのブラウザは動画再生に対応していません。
+      </video>
+
+      <!-- Confetti Container -->
+      <div id="confettiContainer" class="absolute inset-0 pointer-events-none overflow-hidden z-10"></div>
+
+      <!-- HUD Overlay -->
+      <div id="hud" class="absolute top-4 left-4 right-4 flex justify-between items-start pointer-events-none z-20 transition-opacity duration-300 opacity-0">
+        <div class="space-y-1">
+          <div id="command" class="text-3xl font-black italic tracking-wide text-amber-400 bg-slate-900/80 px-5 py-2 rounded-2xl border border-amber-500/40 shadow-xl text-shadow-glow inline-block">
+            READY...
+          </div>
+          <div id="status" class="text-xs font-bold text-cyan-300 bg-slate-900/80 px-3 py-1 rounded-md border border-cyan-500/30">
+            身体の動きを解析中
+          </div>
+        </div>
+
+        <div class="text-right glass-panel px-4 py-2 rounded-2xl border border-slate-700">
+          <div class="text-[10px] font-bold text-slate-400 tracking-wider">SCORE</div>
+          <div id="score" class="text-4xl font-black text-white tracking-tight">0</div>
+          <div id="combo" class="text-xs font-extrabold text-cyan-400">×0 COMBO</div>
+        </div>
+      </div>
+
+      <!-- Action Feedback Popup Banner (PERFECT / GREAT / MISS) -->
+      <div id="feedbackBanner" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-20 transition-all duration-300 transform scale-50 opacity-0">
+        <span id="feedbackText" class="text-5xl md:text-7xl font-black italic tracking-wider text-amber-300 drop-shadow-[0_10px_20px_rgba(0,0,0,0.9)]">
+          PERFECT!
+        </span>
+      </div>
+
+      <!-- Player Motion Status Banner -->
+      <div id="actionBanner" class="absolute bottom-6 left-1/2 -translate-x-1/2 glass-panel px-6 py-2.5 rounded-2xl border border-cyan-500/40 text-center pointer-events-none transition-all duration-200 transform opacity-0 translate-y-4 z-20">
+        <span id="actionText" class="text-xl font-extrabold text-white">READY</span>
+      </div>
+
+      <!-- Start Layer Screen -->
+      <div id="startLayer" class="absolute inset-0 glass-panel flex flex-col items-center justify-center p-6 text-center z-30 transition-opacity duration-300">
+        <div class="max-w-md space-y-5">
+          <div class="inline-flex p-4 bg-cyan-500/10 rounded-full border border-cyan-500/30 text-cyan-400">
+            <svg class="w-12 h-12 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+          </div>
+          <h2 class="text-2xl font-black tracking-tight text-white">映像に合わせて体を動かそう！</h2>
+          <p class="text-slate-300 text-xs leading-relaxed">
+            カメラから1.5〜2m離れ、全身が映る位置に立ってください。<br>
+            画面に出る「JUMP」「LEFT」「DUCK」「DODGE」の指示に合わせてアクション！
+          </p>
+
+          <div class="flex flex-col gap-3 pt-2">
+            <button id="startButton" class="w-full py-3.5 px-6 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-extrabold rounded-xl shadow-lg shadow-cyan-500/25 transition transform active:scale-95 text-base">
+              カメラをつないでスタート
+            </button>
+            <button id="keyboardStartBtn" class="w-full py-2.5 px-6 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl border border-slate-700 transition text-xs">
+              カメラを使わずにキーボードでプレイ（テスト用）
+            </button>
+          </div>
+          
+          <p class="text-[11px] text-slate-500">※カメラ映像は端末内でのみ処理され外部に送信されません。</p>
+        </div>
+      </div>
+
+      <!-- Result Screen -->
+      <div id="resultLayer" class="absolute inset-0 glass-panel flex flex-col items-center justify-center p-6 text-center z-30 hidden">
+        <div class="max-w-md space-y-5">
+          <div class="inline-flex p-4 bg-amber-500/20 rounded-full border border-amber-500/40 text-amber-400">
+            <span class="text-4xl">🏆</span>
+          </div>
+          <h2 class="text-3xl font-black text-white tracking-wider">STAGE CLEAR!</h2>
+          
+          <div class="bg-slate-900/90 rounded-2xl p-4 border border-slate-700 space-y-3">
+            <div class="flex justify-between items-center text-sm border-b border-slate-800 pb-2">
+              <span class="text-slate-400">TOTAL SCORE</span>
+              <span id="resultScore" class="text-2xl font-black text-amber-400">0</span>
+            </div>
+            <div class="flex justify-between items-center text-sm border-b border-slate-800 pb-2">
+              <span class="text-slate-400">MAX COMBO</span>
+              <span id="resultCombo" class="text-lg font-bold text-cyan-400">0</span>
+            </div>
+            <div class="flex justify-between items-center text-xs text-slate-400">
+              <span>PERFECT / GREAT / MISS</span>
+              <span id="resultBreakdown" class="font-bold text-white">0 / 0 / 0</span>
+            </div>
+          </div>
+
+          <button id="resultRestartBtn" class="w-full py-3.5 px-6 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-extrabold rounded-xl shadow-lg transition text-base">
+            もう一度チャレンジ
+          </button>
+        </div>
+      </div>
+
+      <!-- Camera Feed Box (Bottom Right Preview) -->
+      <aside id="cameraBox" class="absolute bottom-4 right-4 w-36 md:w-44 aspect-video bg-slate-950 rounded-xl overflow-hidden border-2 border-cyan-500/50 shadow-xl z-20">
+        <video id="webcam" class="hidden" autoplay playsinline muted></video>
+        <canvas id="skeleton" class="w-full h-full object-cover transform -scale-x-100"></canvas>
+        <span class="absolute bottom-1 left-2 text-[9px] font-bold text-cyan-400 bg-slate-900/80 px-1.5 py-0.5 rounded border border-cyan-500/30">
+          YOUR MOTION
+        </span>
+      </aside>
+
+    </div>
+
+    <!-- Bottom Controls & Status -->
+    <section class="w-full max-w-5xl mt-4 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex gap-3">
+        <button id="restart" disabled class="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed font-bold text-xs rounded-xl transition shadow-md">
+          もう一度あそぶ
+        </button>
+        <button id="recalibrate" disabled class="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed font-bold text-xs rounded-xl border border-slate-700 transition">
+          ニュートラル姿勢を再設定
+        </button>
+      </div>
+
+      <div id="notice" role="status" class="text-xs font-semibold text-cyan-400 bg-slate-900/60 px-4 py-2 rounded-lg border border-slate-800">
+        システム準備完了
+      </div>
     </section>
-    <section class="controls"><button id="restart" disabled>もう一度あそぶ</button><button id="recalibrate" disabled>ニュートラル姿勢を再設定</button><span id="notice" role="status"></span></section>
-    <section class="howto"><h2>あそびかた</h2><div><p><b>JUMP</b> 上にジャンプ</p><p><b>LEFT / RIGHT</b> 画面に対して左右へ移動</p><p><b>DUCK</b> しゃがむ</p><p><b>DODGE</b> 左右どちらかに避ける</p></div></section>
+
+    <!-- How to Play Card -->
+    <section class="w-full max-w-5xl mt-4 p-4 glass-panel rounded-2xl border border-slate-800">
+      <h3 class="text-xs font-bold tracking-wider text-slate-400 uppercase mb-2 flex items-center gap-2">
+        <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        あそびかた（画面の文字に合わせて身体を動かそう！）
+      </h3>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+        <div class="bg-slate-900/70 p-2.5 rounded-xl border border-slate-800">
+          <div class="text-cyan-400 font-black">JUMP 🦘</div>
+          <div class="text-slate-300 text-[11px] mt-0.5">真上にジャンプ<br><span class="text-slate-500">(キー: ↑ / Space)</span></div>
+        </div>
+        <div class="bg-slate-900/70 p-2.5 rounded-xl border border-slate-800">
+          <div class="text-amber-400 font-black">DUCK 🙇</div>
+          <div class="text-slate-300 text-[11px] mt-0.5">深くしゃがむ<br><span class="text-slate-500">(キー: ↓ / S)</span></div>
+        </div>
+        <div class="bg-slate-900/70 p-2.5 rounded-xl border border-slate-800">
+          <div class="text-emerald-400 font-black">LEFT / RIGHT ↔️</div>
+          <div class="text-slate-300 text-[11px] mt-0.5">画面左右へステップ<br><span class="text-slate-500">(キー: ← → / A D)</span></div>
+        </div>
+        <div class="bg-slate-900/70 p-2.5 rounded-xl border border-slate-800">
+          <div class="text-purple-400 font-black">DODGE ⚡</div>
+          <div class="text-slate-300 text-[11px] mt-0.5">左右どちらかに素早く避ける<br><span class="text-slate-500">(キー: ← または →)</span></div>
+        </div>
+      </div>
+    </section>
+
   </main>
-  <script type="module" src="app.js"></script>
+
+  <script>
+    // Game Sequence based on video timeline (obby_run_30sec.mp4)
+    const SEQUENCE = [
+      { start: 0.0,  end: 3.0,  type: 'COUNTDOWN', text: 'READY...' },
+      { start: 3.0,  end: 7.0,  type: 'RUN',       text: 'GO!' },
+      { start: 7.0,  end: 11.5, type: 'JUMP',      text: 'JUMP!' },
+      { start: 12.0, end: 15.5, type: 'LEFT',      text: 'LEFT!' },
+      { start: 16.0, end: 18.5, type: 'DUCK',      text: 'DUCK!' },
+      { start: 19.0, end: 23.0, type: 'DODGE',     text: 'DODGE!' },
+      { start: 23.0, end: 24.5, type: 'JUMP',      text: 'JUMP!' },
+      { start: 24.5, end: 25.2, type: 'LEFT',      text: 'LEFT!' },
+      { start: 25.2, end: 26.2, type: 'RIGHT',     text: 'RIGHT!' },
+      { start: 26.2, end: 28.0, type: 'DUCK',      text: 'DUCK!' },
+      { start: 28.0, end: 30.0, type: 'GOAL',      text: 'GOAL!' }
+    ];
+
+    const state = {
+      isPlaying: false,
+      useKeyboard: false,
+      hasVideo: false,
+      gameStartTime: 0,
+      score: 0,
+      combo: 0,
+      maxCombo: 0,
+      neutralPose: null,
+      lastActionTime: 0,
+      currentPrompt: null,
+      evaluatedPrompts: new Set(),
+      stats: { perfect: 0, great: 0, miss: 0 }
+    };
+
+    // Elements
+    const video = document.getElementById('courseVideo');
+    const courseCanvas = document.getElementById('courseCanvas');
+    const startLayer = document.getElementById('startLayer');
+    const resultLayer = document.getElementById('resultLayer');
+    const startButton = document.getElementById('startButton');
+    const keyboardStartBtn = document.getElementById('keyboardStartBtn');
+    const toggleKeyboardBtn = document.getElementById('toggleKeyboardBtn');
+    const restartBtn = document.getElementById('restart');
+    const resultRestartBtn = document.getElementById('resultRestartBtn');
+    const recalibrateBtn = document.getElementById('recalibrate');
+    const hud = document.getElementById('hud');
+    const scoreEl = document.getElementById('score');
+    const comboEl = document.getElementById('combo');
+    const commandEl = document.getElementById('command');
+    const statusEl = document.getElementById('status');
+    const noticeEl = document.getElementById('notice');
+    const actionBanner = document.getElementById('actionBanner');
+    const actionText = document.getElementById('actionText');
+    const feedbackBanner = document.getElementById('feedbackBanner');
+    const feedbackText = document.getElementById('feedbackText');
+    const controlModeBadge = document.getElementById('controlModeBadge');
+    const confettiContainer = document.getElementById('confettiContainer');
+
+    const videoElement = document.getElementById('webcam');
+    const skeletonCanvas = document.getElementById('skeleton');
+    const skeletonCtx = skeletonCanvas.getContext('2d');
+
+    let pose = null;
+    let cameraInstance = null;
+
+    let scene, camera3D, renderer3D, tunnelMesh;
+
+    function init3DScene() {
+      if (!courseCanvas) return;
+
+      scene = new THREE.Scene();
+      scene.fog = new THREE.FogExp2(0x020617, 0.03);
+
+      camera3D = new THREE.PerspectiveCamera(75, courseCanvas.clientWidth / courseCanvas.clientHeight, 0.1, 1000);
+      camera3D.position.set(0, 1.2, 5);
+
+      renderer3D = new THREE.WebGLRenderer({ canvas: courseCanvas, antialias: true, alpha: true });
+      renderer3D.setSize(courseCanvas.clientWidth, courseCanvas.clientHeight);
+      renderer3D.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+      // Futuristic wireframe tunnel
+      const tunnelGeo = new THREE.BoxGeometry(12, 8, 120);
+      const tunnelMat = new THREE.MeshBasicMaterial({ color: 0x1e293b, wireframe: true });
+      tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
+      tunnelMesh.position.z = -40;
+      scene.add(tunnelMesh);
+
+      // Lights & stars
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+      scene.add(ambientLight);
+
+      const pointLight = new THREE.PointLight(0x06b6d4, 2, 60);
+      pointLight.position.set(0, 4, 0);
+      scene.add(pointLight);
+
+      // Star particles
+      const starGeo = new THREE.BufferGeometry();
+      const starCoords = [];
+      for(let i = 0; i < 300; i++) {
+        starCoords.push((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 30, (Math.random() - 0.5) * 100);
+      }
+      starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starCoords, 3));
+      const starMat = new THREE.PointsMaterial({ color: 0x38bdf8, size: 0.2 });
+      scene.add(new THREE.Points(starGeo, starMat));
+    }
+
+    function update3DScene(t) {
+      if (!renderer3D) return;
+
+      // Tunnel motion effect
+      tunnelMesh.position.z = -40 + ((t * 15) % 20);
+
+      // Remove previous dynamic obstacle meshes
+      for (let i = scene.children.length - 1; i >= 0; i--) {
+        if (scene.children[i].userData && scene.children[i].userData.isDynamic) {
+          scene.remove(scene.children[i]);
+        }
+      }
+
+      // Render 3D obstacles according to sequence timeframe
+      SEQUENCE.forEach(seq => {
+        if (['JUMP', 'LEFT', 'RIGHT', 'DUCK', 'DODGE'].includes(seq.type)) {
+          const timeDiff = seq.start - t;
+          if (timeDiff > -1.0 && timeDiff < 3.0) {
+            const zPos = -timeDiff * 18;
+            const mat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
+
+            if (seq.type === 'JUMP') {
+              const geo = new THREE.BoxGeometry(8, 1.2, 1);
+              const mesh = new THREE.Mesh(geo, mat);
+              mesh.position.set(0, -1.0, zPos);
+              mesh.userData = { isDynamic: true };
+              scene.add(mesh);
+            } else if (seq.type === 'DUCK') {
+              const geo = new THREE.BoxGeometry(8, 3, 1);
+              const mesh = new THREE.Mesh(geo, mat);
+              mesh.position.set(0, 2.0, zPos);
+              mesh.userData = { isDynamic: true };
+              scene.add(mesh);
+            } else if (seq.type === 'LEFT') {
+              const geo = new THREE.BoxGeometry(4, 5, 1);
+              const mesh = new THREE.Mesh(geo, mat);
+              mesh.position.set(2.0, 0, zPos);
+              mesh.userData = { isDynamic: true };
+              scene.add(mesh);
+            } else if (seq.type === 'RIGHT') {
+              const geo = new THREE.BoxGeometry(4, 5, 1);
+              const mesh = new THREE.Mesh(geo, mat);
+              mesh.position.set(-2.0, 0, zPos);
+              mesh.userData = { isDynamic: true };
+              scene.add(mesh);
+            } else if (seq.type === 'DODGE') {
+              const geo = new THREE.BoxGeometry(3, 5, 1);
+              const mesh = new THREE.Mesh(geo, mat);
+              mesh.position.set(0, 0, zPos);
+              mesh.userData = { isDynamic: true };
+              scene.add(mesh);
+            }
+          }
+        }
+      });
+
+      renderer3D.render(scene, camera3D);
+    }
+
+    function getGameTime() {
+      if (state.hasVideo && video && !video.paused && video.currentTime > 0) {
+        return video.currentTime;
+      }
+      return (performance.now() - state.gameStartTime) / 1000;
+    }
+
+    function onResults(results) {
+      skeletonCanvas.width = videoElement.videoWidth || 320;
+      skeletonCanvas.height = videoElement.videoHeight || 240;
+
+      skeletonCtx.save();
+      skeletonCtx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
+      if (results.image) {
+        skeletonCtx.drawImage(results.image, 0, 0, skeletonCanvas.width, skeletonCanvas.height);
+      }
+
+      if (results.poseLandmarks) {
+        drawSkeleton(results.poseLandmarks);
+        if (state.isPlaying && !state.useKeyboard) {
+          processPoseMotion(results.poseLandmarks);
+        }
+      }
+      skeletonCtx.restore();
+    }
+
+    function drawSkeleton(landmarks) {
+      const connections = [
+        [11, 12], [11, 23], [12, 24], [23, 24],
+        [11, 13], [13, 15], [12, 14], [14, 16],
+        [23, 25], [25, 27], [24, 26], [26, 28]
+      ];
+
+      skeletonCtx.strokeStyle = '#06b6d4';
+      skeletonCtx.lineWidth = 3;
+
+      connections.forEach(([i, j]) => {
+        if (landmarks[i] && landmarks[j]) {
+          skeletonCtx.beginPath();
+          skeletonCtx.moveTo(landmarks[i].x * skeletonCanvas.width, landmarks[i].y * skeletonCanvas.height);
+          skeletonCtx.lineTo(landmarks[j].x * skeletonCanvas.width, landmarks[j].y * skeletonCanvas.height);
+          skeletonCtx.stroke();
+        }
+      });
+    }
+
+    function processPoseMotion(landmarks) {
+      const nose = landmarks[0];
+      const leftShoulder = landmarks[11];
+      const rightShoulder = landmarks[12];
+
+      if (!nose || !leftShoulder || !rightShoulder) return;
+
+      const shoulderCenterY = (leftShoulder.y + rightShoulder.y) / 2;
+      const shoulderCenterX = (leftShoulder.x + rightShoulder.x) / 2;
+
+      if (!state.neutralPose) {
+        state.neutralPose = { y: shoulderCenterY, x: shoulderCenterX };
+        noticeEl.innerText = 'ニュートラル姿勢をキャリブレーション完了';
+        return;
+      }
+
+      const deltaY = state.neutralPose.y - shoulderCenterY; // Upward = positive
+      const deltaX = shoulderCenterX - state.neutralPose.x; // Mirrored
+
+      const now = performance.now();
+      if (now - state.lastActionTime < 300) return;
+
+      if (deltaY > 0.07) {
+        handlePlayerAction('JUMP');
+        state.lastActionTime = now;
+      } else if (deltaY < -0.08) {
+        handlePlayerAction('DUCK');
+        state.lastActionTime = now;
+      } else if (deltaX < -0.07) {
+        handlePlayerAction('LEFT');
+        state.lastActionTime = now;
+      } else if (deltaX > 0.07) {
+        handlePlayerAction('RIGHT');
+        state.lastActionTime = now;
+      }
+    }
+
+    function handlePlayerAction(actionType) {
+      showActionText(actionType);
+
+      if (!state.isPlaying || !state.currentPrompt) return;
+
+      const prompt = state.currentPrompt;
+      const promptId = `${prompt.start}-${prompt.type}`;
+
+      if (state.evaluatedPrompts.has(promptId)) return;
+
+      const isMatch = (prompt.type === actionType) || 
+                      (prompt.type === 'DODGE' && (actionType === 'LEFT' || actionType === 'RIGHT'));
+
+      if (isMatch) {
+        state.evaluatedPrompts.add(promptId);
+        const currentTime = video.currentTime;
+        const promptDuration = prompt.end - prompt.start;
+        const progress = (currentTime - prompt.start) / promptDuration;
+
+        let quality = 'GREAT';
+        let scoreAdd = 100;
+
+        if (progress >= 0.15 && progress <= 0.7) {
+          quality = 'PERFECT';
+          scoreAdd = 200;
+          state.stats.perfect++;
+        } else {
+          state.stats.great++;
+        }
+
+        state.combo++;
+        if (state.combo > state.maxCombo) state.maxCombo = state.combo;
+        state.score += scoreAdd * state.combo;
+
+        scoreEl.innerText = state.score;
+        comboEl.innerText = `×${state.combo} COMBO`;
+
+        showFeedback(quality);
+      }
+    }
+
+    function showActionText(text) {
+      actionText.innerText = text;
+      actionBanner.className = 'absolute bottom-6 left-1/2 -translate-x-1/2 glass-panel px-6 py-2.5 rounded-2xl border border-cyan-500/40 text-center pointer-events-none transition-all duration-200 transform opacity-100 translate-y-0 text-cyan-300 font-extrabold';
+      setTimeout(() => {
+        actionBanner.classList.add('opacity-0', 'translate-y-4');
+      }, 400);
+    }
+
+    function showFeedback(quality) {
+      if (quality === 'PERFECT') {
+        feedbackText.innerText = 'PERFECT!!';
+        feedbackText.className = 'text-5xl md:text-7xl font-black italic tracking-wider text-amber-300 drop-shadow-[0_0_30px_rgba(251,191,36,0.8)]';
+      } else if (quality === 'GREAT') {
+        feedbackText.innerText = 'GREAT!';
+        feedbackText.className = 'text-5xl md:text-7xl font-black italic tracking-wider text-cyan-300 drop-shadow-[0_0_30px_rgba(6,182,212,0.8)]';
+      } else {
+        feedbackText.innerText = 'MISS';
+        feedbackText.className = 'text-5xl md:text-7xl font-black italic tracking-wider text-red-500 drop-shadow-[0_0_30px_rgba(239,68,68,0.8)]';
+      }
+
+      feedbackBanner.className = 'absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-20 transition-all duration-300 transform scale-100 opacity-100';
+      setTimeout(() => {
+        feedbackBanner.className = 'absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-20 transition-all duration-300 transform scale-50 opacity-0';
+      }, 600);
+    }
+
+    // Keyboard Fallback
+    window.addEventListener('keydown', (e) => {
+      if (!state.isPlaying) return;
+      if (e.key === 'ArrowUp' || e.key === ' ') handlePlayerAction('JUMP');
+      if (e.key === 'ArrowDown' || e.key === 's') handlePlayerAction('DUCK');
+      if (e.key === 'ArrowLeft' || e.key === 'a') handlePlayerAction('LEFT');
+      if (e.key === 'ArrowRight' || e.key === 'd') handlePlayerAction('RIGHT');
+    });
+
+    async function initCamera() {
+      noticeEl.innerText = 'カメラライブラリを起動中…';
+      
+      pose = new Pose({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+      });
+
+      pose.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: true,
+        enableSegmentation: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      pose.onResults(onResults);
+
+      cameraInstance = new Camera(videoElement, {
+        onFrame: async () => {
+          await pose.send({ image: videoElement });
+        },
+        width: 640,
+        height: 480
+      });
+
+      try {
+        await cameraInstance.start();
+        noticeEl.innerText = 'カメラ接続成功';
+        controlModeBadge.innerText = '📷 カメラモーションモード';
+        controlModeBadge.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-cyan-900/60 text-cyan-300 border border-cyan-500/40';
+      } catch (err) {
+        console.warn('Camera failed:', err);
+        noticeEl.innerText = 'カメラ利用不可。キーボードモードを使用します';
+        enableKeyboardMode();
+      }
+    }
+
+    function enableKeyboardMode() {
+      state.useKeyboard = true;
+      controlModeBadge.innerText = '⌨️ キーボードモード';
+      controlModeBadge.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-amber-900/60 text-amber-300 border border-amber-500/40';
+      noticeEl.innerText = 'キーボード操作が有効です';
+    }
+
+    function startGame() {
+      startLayer.classList.add('opacity-0', 'pointer-events-none');
+      resultLayer.classList.add('hidden');
+      hud.classList.remove('opacity-0');
+
+      restartBtn.disabled = false;
+      recalibrateBtn.disabled = false;
+
+      state.isPlaying = true;
+      state.score = 0;
+      state.combo = 0;
+      state.maxCombo = 0;
+      state.evaluatedPrompts.clear();
+      state.stats = { perfect: 0, great: 0, miss: 0 };
+      state.neutralPose = null;
+      state.gameStartTime = performance.now();
+      state.hasVideo = false;
+
+      scoreEl.innerText = '0';
+      comboEl.innerText = '×0 COMBO';
+
+      // Try video playback, fallback to 3D Canvas if unavailable
+      video.currentTime = 0;
+      video.play().then(() => {
+        state.hasVideo = true;
+        video.classList.remove('opacity-0');
+      }).catch(err => {
+        console.warn('Video element playback failed or video missing. Fallback to 3D Canvas:', err);
+        state.hasVideo = false;
+        video.classList.add('opacity-0');
+      });
+
+      requestAnimationFrame(updateGameLoop);
+    }
+
+    function updateGameLoop() {
+      if (!state.isPlaying) return;
+
+      const t = getGameTime();
+      update3DScene(t);
+
+      const current = SEQUENCE.find(s => t >= s.start && t < s.end);
+
+      if (current) {
+        state.currentPrompt = current;
+        commandEl.innerText = current.text;
+
+        // Visual coloring based on action
+        if (current.type === 'JUMP') commandEl.className = 'text-3xl font-black italic tracking-wide text-cyan-400 bg-slate-900/80 px-5 py-2 rounded-2xl border border-cyan-500/40 shadow-xl text-shadow-glow inline-block';
+        else if (current.type === 'DUCK') commandEl.className = 'text-3xl font-black italic tracking-wide text-amber-400 bg-slate-900/80 px-5 py-2 rounded-2xl border border-amber-500/40 shadow-xl text-shadow-glow inline-block';
+        else if (current.type === 'GOAL') {
+          commandEl.className = 'text-3xl font-black italic tracking-wide text-emerald-400 bg-slate-900/80 px-5 py-2 rounded-2xl border border-emerald-500/40 shadow-xl text-shadow-glow inline-block';
+          triggerConfetti();
+        } else commandEl.className = 'text-3xl font-black italic tracking-wide text-purple-400 bg-slate-900/80 px-5 py-2 rounded-2xl border border-purple-500/40 shadow-xl text-shadow-glow inline-block';
+
+        // Check for missed action window
+        if (['JUMP', 'LEFT', 'RIGHT', 'DUCK', 'DODGE'].includes(current.type)) {
+          const promptId = `${current.start}-${current.type}`;
+          if (t > current.end - 0.2 && !state.evaluatedPrompts.has(promptId)) {
+            state.evaluatedPrompts.add(promptId);
+            state.combo = 0;
+            comboEl.innerText = '×0 COMBO';
+            state.stats.miss++;
+            showFeedback('MISS');
+          }
+        }
+      }
+
+      // Stage clear check (30 seconds)
+      if (t >= 29.5 || (state.hasVideo && video.ended)) {
+        finishGame();
+        return;
+      }
+
+      requestAnimationFrame(updateGameLoop);
+    }
+
+    function triggerConfetti() {
+      if (confettiContainer.children.length > 0) return;
+      const colors = ['#06b6d4', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6'];
+      for (let i = 0; i < 60; i++) {
+        const p = document.createElement('div');
+        p.className = 'confetti-piece';
+        p.style.left = Math.random() * 100 + '%';
+        p.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+        p.style.animationDelay = Math.random() * 1.5 + 's';
+        confettiContainer.appendChild(p);
+      }
+    }
+
+    function finishGame() {
+      state.isPlaying = false;
+      document.getElementById('resultScore').innerText = state.score;
+      document.getElementById('resultCombo').innerText = `×${state.maxCombo}`;
+      document.getElementById('resultBreakdown').innerText = `${state.stats.perfect} / ${state.stats.great} / ${state.stats.miss}`;
+      
+      resultLayer.classList.remove('hidden');
+    }
+
+    window.addEventListener('load', () => {
+      init3DScene();
+    });
+
+    window.addEventListener('resize', () => {
+      if (renderer3D && courseCanvas) {
+        renderer3D.setSize(courseCanvas.clientWidth, courseCanvas.clientHeight);
+        camera3D.aspect = courseCanvas.clientWidth / courseCanvas.clientHeight;
+        camera3D.updateProjectionMatrix();
+      }
+    });
+
+    // Event Handlers
+    startButton.addEventListener('click', async () => {
+      await initCamera();
+      startGame();
+    });
+
+    keyboardStartBtn.addEventListener('click', () => {
+      enableKeyboardMode();
+      startGame();
+    });
+
+    toggleKeyboardBtn.addEventListener('click', () => {
+      if (state.useKeyboard) {
+        initCamera();
+      } else {
+        enableKeyboardMode();
+      }
+    });
+
+    restartBtn.addEventListener('click', () => {
+      startGame();
+    });
+
+    resultRestartBtn.addEventListener('click', () => {
+      confettiContainer.innerHTML = '';
+      startGame();
+    });
+
+    recalibrateBtn.addEventListener('click', () => {
+      state.neutralPose = null;
+      noticeEl.innerText = 'カメラの前で直立してください…キャリブレーションを再設定します';
+    });
+  </script>
 </body>
 </html>
